@@ -1,0 +1,14 @@
+node_modules
+dist
+coverage
+.git
+.github
+.env
+.env.*
+!.env.example
+*.log
+Dockerfile
+.dockerignore
+README.md
+LICENSE
+Blog API.postman_collection.json

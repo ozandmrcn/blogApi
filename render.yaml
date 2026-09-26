@@ -1,0 +1,47 @@
+# Render blueprint: https://render.com/docs/blueprint-spec
+#
+# Set the secrets below as environment variables in the Render dashboard
+# (or with `render secret set` in the CLI):
+#
+#   MONGO_URI                mongodb+srv://<user>:<password>@<cluster>.mongodb.net/nest
+#   JWT_ACCESS_SECRET        <long random string>
+#   JWT_REFRESH_SECRET       <different long random string>
+#   FRONTEND_URL             https://<your-client>.vercel.app  (comma-separated for several)
+#   COOKIE_SAME_SITE         none
+#   COOKIE_SECURE            true
+#
+# COOKIE_SAME_SITE=none is required because a Vercel frontend and a Render API
+# are different sites, so the browser only returns the auth cookies when they
+# are marked SameSite=None; Secure.
+services:
+  - type: web
+    name: blog-api
+    runtime: node
+    plan: free
+    region: oregon
+    buildCommand: npm ci && npm run build
+    startCommand: node dist/main.js
+    healthCheckPath: /api
+    autoDeploy: true
+    envVars:
+      - key: NODE_ENV
+        value: production
+      # Render injects PORT automatically; it is left unset on purpose.
+      - key: NODE_VERSION
+        value: "22"
+      - key: JWT_ACCESS_EXPIRES_IN
+        value: 15m
+      - key: JWT_REFRESH_EXPIRES_IN
+        value: 7d
+      - key: COOKIE_SAME_SITE
+        value: none
+      - key: COOKIE_SECURE
+        value: "true"
+      - key: MONGO_URI
+        sync: false
+      - key: JWT_ACCESS_SECRET
+        generateValue: true
+      - key: JWT_REFRESH_SECRET
+        generateValue: true
+      - key: FRONTEND_URL
+        sync: false

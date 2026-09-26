@@ -1,0 +1,1844 @@
+{
+  "info": {
+    "_postman_id": "3f1c9a52-7b4e-4d6a-9c21-8e0d5a7f4b10",
+    "name": "Blog API",
+    "description": "# Blog API\n\nEnd-to-end test suite for the **blogApi** service behind `fullStackBlog`.\n\n## How it works\n\nAuthentication is **cookie based**: `POST /api/auth/login` sets the `access_token` and `refresh_token` httpOnly cookies, and Postman's cookie jar replays them on every later request. There is deliberately **no Bearer token** anywhere in this collection, because the API never accepts one.\n\nThe requests are ordered as a single happy path with failure cases woven in, so **Run Collection** top to bottom and every assertion passes on a fresh database.\n\n| Folder | What it covers |\n| --- | --- |\n| `00 · Health Check` | Service is up |\n| `01 · Authentication` | Register, log in, rotate the access token |\n| `02 · User Profile` | Read the profile, change username/email, change password, prove the new password works |\n| `03 · Blog Posts` | Create, list, list own, read, update |\n| `04 · Comments` | Create, list, delete |\n| `05 · Validation & Error Handling` | Every `400` / `404` / `401` path |\n| `06 · Session Recovery` | Re-establish a valid session after the negative tests |\n| `07 · Ownership Checks` | A second user cannot touch somebody else's post (`403`) |\n| `08 · Teardown` | Back to the author, delete the post, confirm it is gone |\n| `09 · Logout` | Clear the cookies and prove the session is closed |\n\n## Why a second user exists\n\n`07 · Ownership Checks` signs in as a different account, so the `403` responses are produced by real authorisation logic rather than by mocked data. The suite signs back in as the original author afterwards.\n\n## Why `Logout` is the last folder\n\nLogging out clears both auth cookies, so every request after it would run unauthenticated. It is placed last, followed by one request that asserts the session really is closed.\n\n## Running it\n\n```bash\n# The API must already be running.\nnpm test                                        # against http://localhost:3000\nnpm test -- --env-var baseUrl=http://host:port  # against another host\n```\n\nIn the Postman app: **Import** this file, then **Run Collection**.\n\nEvery run generates a fresh set of credentials, so the collection is safe to re-run against a database that already holds data from a previous run.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "auth": {
+    "type": "noauth"
+  },
+  "variable": [
+    {
+      "key": "baseUrl",
+      "value": "http://localhost:3000",
+      "type": "string"
+    },
+    {
+      "key": "runId",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "username",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "email",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "password",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "newUsername",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "newEmail",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "newPassword",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "secondUsername",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "secondEmail",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "secondPassword",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "userId",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "secondUserId",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "postId",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "commentId",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "postTitle",
+      "value": "Getting started with Inkwell",
+      "type": "string"
+    },
+    {
+      "key": "updatedPostTitle",
+      "value": "Getting started with Inkwell (edited)",
+      "type": "string"
+    },
+    {
+      "key": "commentContent",
+      "value": "Created by the Postman collection.",
+      "type": "string"
+    }
+  ],
+  "item": [
+    {
+      "name": "00 · Health Check",
+      "description": "Render polls this path to decide the service is up, so it is also the quickest way to confirm the API is reachable.",
+      "item": [
+        {
+          "name": "Health Check",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/api",
+            "description": "Public liveness probe. Expects `200` and a plain-text greeting."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status code is 200\", () => {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "",
+                  "pm.test(\"The service greets the caller\", () => {",
+                  "    pm.expect(pm.response.text()).to.include(\"Hello World\");",
+                  "});",
+                  "",
+                  "pm.test(\"The response is fast enough to be a real health check\", () => {",
+                  "    pm.expect(pm.response.responseTime).to.be.below(5000);",
+                  "});"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "01 · Authentication",
+      "description": "Account creation and the cookie-based session. No token is returned in the body — the cookies are the whole mechanism.",
+      "item": [
+        {
+          "name": "Register",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"username\": \"{{username}}\",\n  \"email\": \"{{email}}\",\n  \"password\": \"{{password}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": "{{baseUrl}}/api/auth/register",
+            "description": "Creates an account and returns the password-free user with `201`.\n\nCredentials are generated here, in the first request that needs them, so a re-run never collides with the accounts a previous run created."
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// A fresh identity per run. Base36 of the current timestamp is short,",
+                  "// lowercase and alphanumeric, which satisfies the username pattern.",
+                  "const runId = Date.now().toString(36);",
+                  "",
+                  "pm.collectionVariables.set(\"runId\", runId);",
+                  "pm.collectionVariables.set(\"username\", `tester_${runId}`);",
+                  "pm.collectionVariables.set(\"email\", `tester_${runId}@example.com`);",
+                  "pm.collectionVariables.set(\"password\", \"Str0ng!Pass\");",
+                  "pm.collectionVariables.set(\"newUsername\", `renamed_${runId}`);",
+                  "pm.collectionVariables.set(\"newEmail\", `renamed_${runId}@example.com`);",
+                  "pm.collectionVariables.set(\"newPassword\", \"N3w!Password\");",
+                  "pm.collectionVariables.set(\"secondUsername\", `other_${runId}`);",
+                  "pm.collectionVariables.set(\"secondEmail\", `other_${runId}@example.com`);",
+                  "pm.collectionVariables.set(\"secondPassword\", \"0ther!Pass\");"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status code is 201\", () => {",
+                  "    pm.response.to.have.status(201);",
+                  "});",
+                  "",
+                  "const body = pm.response.json();",
+                  "",
+                  "pm.test(\"Response contains the new user id\", () => {",
+                  "    pm.expect(body).to.have.property(\"id\");",
+                  "    pm.collectionVariables.set(\"userId\", body.id);",
+                  "});",
+                  "",
+                  "pm.test(\"Response echoes the submitted username and email\", () => {",
+                  "    pm.expect(body.username).to.eql(pm.collectionVariables.get(\"username\"));",
+                  "    pm.expect(body.email).to.eql(pm.collectionVariables.get(\"email\"));",
+                  "});",
+                  "",
+                  "pm.test(\"Password hash is never exposed\", () => {",
+                  "    pm.expect(body).to.not.have.property(\"password\");",
+                  "});",
+                  "",
+                  "pm.test(\"Timestamps are present\", () => {",
+                  "    pm.expect(body).to.have.property(\"createdAt\");",
+                  "    pm.expect(body).to.have.property(\"updatedAt\");",
+                  "});",
+                  "",
+                  "pm.test(\"Registering does not open a session\", () => {",
+                  "    const setCookie = pm.response.headers.all()",
+                  "        .filter((header) => header.key.toLowerCase() === \"set-cookie\")",
+                  "        .map((header) => header.value)",
+                  "        .join(\"\\n\");",
+                  "    pm.expect(setCookie).to.not.include(\"access_token\");",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Login",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"username\": \"{{username}}\",\n  \"password\": \"{{password}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": "{{baseUrl}}/api/auth/login",
+            "description": "Exchanges credentials for the token pair. The body carries only the user; the tokens arrive as httpOnly cookies that Postman stores and replays automatically."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status code is 200\", () => {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "",
+                  "const body = pm.response.json();",
+                  "const setCookie = pm.response.headers.all()",
+                  "    .filter((header) => header.key.toLowerCase() === \"set-cookie\")",
+                  "    .map((header) => header.value)",
+                  "    .join(\"\\n\");",
+                  "",
+                  "pm.test(\"Response returns the authenticated user\", () => {",
+                  "    pm.expect(body.id).to.eql(pm.collectionVariables.get(\"userId\"));",
+                  "    pm.expect(body.username).to.eql(pm.collectionVariables.get(\"username\"));",
+                  "});",
+                  "",
+                  "pm.test(\"Password is never returned\", () => {",
+                  "    pm.expect(body).to.not.have.property(\"password\");",
+                  "});",
+                  "",
+                  "pm.test(\"Access token is issued as an httpOnly cookie\", () => {",
+                  "    pm.expect(setCookie).to.include(\"access_token\");",
+                  "    pm.expect(setCookie).to.include(\"HttpOnly\");",
+                  "});",
+                  "",
+                  "pm.test(\"Refresh token is issued as an httpOnly cookie\", () => {",
+                  "    pm.expect(setCookie).to.include(\"refresh_token\");",
+                  "});",
+                  "",
+                  "pm.test(\"No token leaks into the response body\", () => {",
+                  "    const serialised = JSON.stringify(body);",
+                  "    pm.expect(serialised).to.not.include(\"eyJ\");",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Refresh Access Token",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": "{{baseUrl}}/api/auth/refresh-token",
+            "description": "Rotates the access token using the still-valid refresh cookie. This is what lets the client stay signed in after the 15-minute access token expires."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status code is 200\", () => {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "",
+                  "pm.test(\"Response confirms a new access token\", () => {",
+                  "    pm.expect(pm.response.json().message).to.eql(\"A new access token has been issued\");",
+                  "});",
+                  "",
+                  "pm.test(\"A replacement access token cookie is set\", () => {",
+                  "    const setCookie = pm.response.headers.all()",
+                  "        .filter((header) => header.key.toLowerCase() === \"set-cookie\")",
+                  "        .map((header) => header.value)",
+                  "        .join(\"\\n\");",
+                  "    pm.expect(setCookie).to.include(\"access_token\");",
+                  "});",
+                  "",
+                  "pm.test(\"The refresh cookie is not rotated, only the access token\", () => {",
+                  "    const setCookie = pm.response.headers.all()",
+                  "        .filter((header) => header.key.toLowerCase() === \"set-cookie\")",
+                  "        .map((header) => header.value)",
+                  "        .join(\"\\n\");",
+                  "    pm.expect(setCookie).to.not.include(\"refresh_token\");",
+                  "});",
+                  ""
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "02 · User Profile",
+      "description": "Profile reads and writes for the authenticated user, including a password change that is re-hashed server-side.",
+      "item": [
+        {
+          "name": "Session Survives Token Rotation",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status code is 200\", () => {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "",
+                  "const body = pm.response.json();",
+                  "",
+                  "pm.test(\"The rotated access token is accepted\", () => {",
+                  "    pm.expect(body.id).to.eql(pm.collectionVariables.get(\"userId\"));",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/api/user/me",
+            "description": "A real request fired straight after the access cookie was replaced, proving the rotated token is the one the API accepts. This replaces an in-script sub-request, which cannot be trusted to be anonymous."
+          },
+          "response": []
+        },
+        {
+          "name": "Get My Profile",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/api/user/me",
+            "description": "Returns the caller's own profile, resolved from the access token rather than from anything the client sends."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status code is 200\", () => {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "",
+                  "const body = pm.response.json();",
+                  "",
+                  "pm.test(\"Profile belongs to the authenticated user\", () => {",
+                  "    pm.expect(body.id).to.eql(pm.collectionVariables.get(\"userId\"));",
+                  "    pm.expect(body.username).to.eql(pm.collectionVariables.get(\"username\"));",
+                  "});",
+                  "",
+                  "pm.test(\"Profile exposes no password field\", () => {",
+                  "    pm.expect(body).to.not.have.property(\"password\");",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Update Profile",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"username\": \"{{newUsername}}\",\n  \"email\": \"{{newEmail}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": "{{baseUrl}}/api/user/me",
+            "description": "Partial update. Only the fields that are sent are validated and written, so `password` can be left out entirely."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status code is 200\", () => {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "",
+                  "const body = pm.response.json();",
+                  "",
+                  "pm.test(\"Username and email are updated\", () => {",
+                  "    pm.expect(body.username).to.eql(pm.collectionVariables.get(\"newUsername\"));",
+                  "    pm.expect(body.email).to.eql(pm.collectionVariables.get(\"newEmail\"));",
+                  "});",
+                  "",
+                  "pm.test(\"The id is unchanged\", () => {",
+                  "    pm.expect(body.id).to.eql(pm.collectionVariables.get(\"userId\"));",
+                  "});",
+                  "",
+                  "pm.test(\"Password is never echoed back\", () => {",
+                  "    pm.expect(body).to.not.have.property(\"password\");",
+                  "});",
+                  "",
+                  "// Later requests sign in with the new credentials.",
+                  "pm.collectionVariables.set(\"username\", pm.collectionVariables.get(\"newUsername\"));",
+                  "pm.collectionVariables.set(\"email\", pm.collectionVariables.get(\"newEmail\"));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Update Password",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"password\": \"{{newPassword}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": "{{baseUrl}}/api/user/me",
+            "description": "Sends a **plain** password. The API must hash it before writing, which the next request proves by logging in with it."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status code is 200\", () => {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "",
+                  "pm.test(\"Response does not leak the new password\", () => {",
+                  "    pm.expect(pm.response.text()).to.not.include(pm.collectionVariables.get(\"newPassword\"));",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Login With Updated Password",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"username\": \"{{username}}\",\n  \"password\": \"{{newPassword}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": "{{baseUrl}}/api/auth/login",
+            "description": "Regression check for the password round-trip: if the value had been stored in plain text, or hashed twice, this login would fail with `401`."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status code is 200\", () => {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "",
+                  "const body = pm.response.json();",
+                  "",
+                  "pm.test(\"Sign in works with the updated credentials\", () => {",
+                  "    pm.expect(body.id).to.eql(pm.collectionVariables.get(\"userId\"));",
+                  "    pm.expect(body.username).to.eql(pm.collectionVariables.get(\"username\"));",
+                  "});",
+                  ""
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "03 · Blog Posts",
+      "description": "The full post lifecycle for the signed-in author.",
+      "item": [
+        {
+          "name": "Create Post",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"title\": \"{{postTitle}}\",\n  \"content\": \"Body written by the Postman collection. **Markdown** works too.\",\n  \"tags\": [\"postman\", \"api\"]\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": "{{baseUrl}}/api/blog",
+            "description": "Creates a post owned by the caller. The author is taken from the token, never from the body, so a post cannot be created on someone else's behalf."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status code is 201\", () => {",
+                  "    pm.response.to.have.status(201);",
+                  "});",
+                  "",
+                  "const body = pm.response.json();",
+                  "",
+                  "pm.test(\"Response contains the new post id\", () => {",
+                  "    pm.expect(body).to.have.property(\"id\");",
+                  "    pm.collectionVariables.set(\"postId\", body.id);",
+                  "});",
+                  "",
+                  "pm.test(\"Title and content are stored as submitted\", () => {",
+                  "    pm.expect(body.title).to.eql(pm.collectionVariables.get(\"postTitle\"));",
+                  "    pm.expect(body.content).to.include(\"Body written by the Postman collection\");",
+                  "});",
+                  "",
+                  "pm.test(\"Tags are stored as an array of strings\", () => {",
+                  "    pm.expect(body.tags).to.be.an(\"array\");",
+                  "    pm.expect(body.tags).to.include(\"postman\");",
+                  "    pm.expect(body.tags).to.include(\"api\");",
+                  "});",
+                  "",
+                  "pm.test(\"The author is the authenticated user\", () => {",
+                  "    pm.expect(body.author).to.eql(pm.collectionVariables.get(\"userId\"));",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "List All Posts",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/api/blog?page=1&limit=10",
+            "description": "Public paginated feed. Anyone can read it, including anonymous callers."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status code is 200\", () => {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "",
+                  "const body = pm.response.json();",
+                  "",
+                  "pm.test(\"Pagination metadata is returned\", () => {",
+                  "    pm.expect(body).to.have.property(\"total\");",
+                  "    pm.expect(body.page).to.eql(1);",
+                  "    pm.expect(body.limit).to.eql(10);",
+                  "    pm.expect(body.pages).to.be.at.least(1);",
+                  "});",
+                  "",
+                  "pm.test(\"The created post appears in the feed\", () => {",
+                  "    pm.expect(body.blogs).to.be.an(\"array\").that.is.not.empty;",
+                  "    pm.expect(body.blogs.map((post) => post.id)).to.include(pm.collectionVariables.get(\"postId\"));",
+                  "});",
+                  "",
+                  "pm.test(\"The feed is sorted newest first\", () => {",
+                  "    const timestamps = body.blogs.map((post) => new Date(post.createdAt).getTime());",
+                  "    const sorted = [...timestamps].sort((a, b) => b - a);",
+                  "    pm.expect(timestamps).to.eql(sorted);",
+                  "});",
+                  "",
+                  "pm.test(\"The author is populated and hides the password\", () => {",
+                  "    const post = body.blogs.find((entry) => entry.id === pm.collectionVariables.get(\"postId\"));",
+                  "    pm.expect(post.author).to.be.an(\"object\");",
+                  "    pm.expect(post.author).to.not.have.property(\"password\");",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "List My Posts",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/api/blog/own?page=1&limit=10",
+            "description": "The same feed, filtered to the authenticated author. Requires a token."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status code is 200\", () => {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "",
+                  "const body = pm.response.json();",
+                  "",
+                  "pm.test(\"The created post is present\", () => {",
+                  "    pm.expect(body.blogs.map((post) => post.id)).to.include(pm.collectionVariables.get(\"postId\"));",
+                  "});",
+                  "",
+                  "pm.test(\"Every post is owned by the authenticated user\", () => {",
+                  "    body.blogs.forEach((post) => {",
+                  "        pm.expect(post.author.id).to.eql(pm.collectionVariables.get(\"userId\"));",
+                  "    });",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Get Post by Id",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/api/blog/{{postId}}",
+            "description": "Single post, with the author populated and the comment count resolved."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status code is 200\", () => {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "",
+                  "const body = pm.response.json();",
+                  "",
+                  "pm.test(\"The requested post is returned\", () => {",
+                  "    pm.expect(body.id).to.eql(pm.collectionVariables.get(\"postId\"));",
+                  "    pm.expect(body.title).to.eql(pm.collectionVariables.get(\"postTitle\"));",
+                  "});",
+                  "",
+                  "pm.test(\"The author is populated with an id and no password\", () => {",
+                  "    pm.expect(body.author).to.be.an(\"object\");",
+                  "    pm.expect(body.author.id).to.eql(pm.collectionVariables.get(\"userId\"));",
+                  "    pm.expect(body.author).to.not.have.property(\"password\");",
+                  "});",
+                  "",
+                  "pm.test(\"commentCount is resolved and starts at zero\", () => {",
+                  "    pm.expect(body.commentCount).to.be.a(\"number\");",
+                  "    pm.expect(body.commentCount).to.eql(0);",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Update Post",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"title\": \"{{updatedPostTitle}}\",\n  \"content\": \"Updated by the Postman collection.\",\n  \"tags\": [\"postman\", \"edited\"]\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": "{{baseUrl}}/api/blog/{{postId}}",
+            "description": "Author-only update. A caller who does not own the post gets `403` — that case is covered in `07 · Ownership Checks`."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status code is 200\", () => {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "",
+                  "const body = pm.response.json();",
+                  "",
+                  "pm.test(\"The new title and content are returned\", () => {",
+                  "    pm.expect(body.title).to.eql(pm.collectionVariables.get(\"updatedPostTitle\"));",
+                  "    pm.expect(body.content).to.eql(\"Updated by the Postman collection.\");",
+                  "});",
+                  "",
+                  "pm.test(\"Tags are replaced, not merged\", () => {",
+                  "    pm.expect(body.tags).to.eql([\"postman\", \"edited\"]);",
+                  "});",
+                  "",
+                  "pm.test(\"The id is unchanged\", () => {",
+                  "    pm.expect(body.id).to.eql(pm.collectionVariables.get(\"postId\"));",
+                  "});"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "04 · Comments",
+      "description": "Comment thread for the post created above. Reads are public; writes require a token and are restricted to the comment's author.",
+      "item": [
+        {
+          "name": "Create Comment",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"content\": \"{{commentContent}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": "{{baseUrl}}/api/blog/{{postId}}/comments",
+            "description": "Adds a comment to the post. The API resolves the post first, so a comment can never be attached to a post that does not exist."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status code is 201\", () => {",
+                  "    pm.response.to.have.status(201);",
+                  "});",
+                  "",
+                  "const body = pm.response.json();",
+                  "",
+                  "pm.test(\"Response contains the new comment id\", () => {",
+                  "    pm.expect(body).to.have.property(\"id\");",
+                  "    pm.collectionVariables.set(\"commentId\", body.id);",
+                  "});",
+                  "",
+                  "pm.test(\"Content and parent post are stored as submitted\", () => {",
+                  "    pm.expect(body.content).to.eql(pm.collectionVariables.get(\"commentContent\"));",
+                  "    pm.expect(body.blog).to.eql(pm.collectionVariables.get(\"postId\"));",
+                  "});",
+                  "",
+                  "pm.test(\"The commenter is the authenticated user\", () => {",
+                  "    pm.expect(body.user).to.eql(pm.collectionVariables.get(\"userId\"));",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "List Comments",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/api/blog/{{postId}}/comments",
+            "description": "Newest-first thread with the author populated. No token needed."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status code is 200\", () => {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "",
+                  "const body = pm.response.json();",
+                  "",
+                  "pm.test(\"An array of comments is returned\", () => {",
+                  "    pm.expect(body).to.be.an(\"array\").that.is.not.empty;",
+                  "});",
+                  "",
+                  "pm.test(\"The created comment is present with a populated author\", () => {",
+                  "    const comment = body.find((entry) => entry.id === pm.collectionVariables.get(\"commentId\"));",
+                  "    pm.expect(comment).to.not.be.undefined;",
+                  "    pm.expect(comment.user).to.be.an(\"object\");",
+                  "    pm.expect(comment.user.id).to.eql(pm.collectionVariables.get(\"userId\"));",
+                  "    pm.expect(comment.user).to.not.have.property(\"password\");",
+                  "});",
+                  "",
+                  "pm.test(\"The thread is sorted newest first\", () => {",
+                  "    const timestamps = body.map((entry) => new Date(entry.createdAt).getTime());",
+                  "    const sorted = [...timestamps].sort((a, b) => b - a);",
+                  "    pm.expect(timestamps).to.eql(sorted);",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Delete Comment",
+          "request": {
+            "method": "DELETE",
+            "header": [],
+            "url": "{{baseUrl}}/api/blog/{{postId}}/comments/{{commentId}}",
+            "description": "Deletes the caller's own comment. The id is kept in `commentId` so `05 · Validation` can prove a second delete is refused."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status code is 200\", () => {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "",
+                  "pm.test(\"The deleted comment is echoed back\", () => {",
+                  "    pm.expect(pm.response.json().id).to.eql(pm.collectionVariables.get(\"commentId\"));",
+                  "});"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "05 · Validation & Error Handling",
+      "description": "Every rejection path the API is supposed to produce. These run while the session is still valid, so they exercise validation and authorisation rather than missing credentials.",
+      "item": [
+        {
+          "name": "400 · Password Too Weak",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"username\": \"weak_{{runId}}\",\n  \"email\": \"weak_{{runId}}@example.com\",\n  \"password\": \"abc\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": "{{baseUrl}}/api/auth/register",
+            "description": "The password fails the strength policy: shorter than 8 characters and missing an uppercase letter, a number and a symbol."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status code is 400\", () => {",
+                  "    pm.response.to.have.status(400);",
+                  "});",
+                  "",
+                  "pm.test(\"The password field is named in the error\", () => {",
+                  "    const { message } = pm.response.json();",
+                  "    const messages = Array.isArray(message) ? message : [message];",
+                  "    pm.expect(messages.join(\" \")).to.include(\"password\");",
+                  "});",
+                  "",
+                  "pm.test(\"The response follows the standard error shape\", () => {",
+                  "    pm.expect(pm.response.json()).to.have.property(\"statusCode\", 400);",
+                  "    pm.expect(pm.response.json()).to.have.property(\"error\", \"Bad Request\");",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "400 · Email Is Not An Email",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"username\": \"bad_{{runId}}\",\n  \"email\": \"not-an-email\",\n  \"password\": \"{{password}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": "{{baseUrl}}/api/auth/register",
+            "description": "Everything else is valid, so the `400` can only come from the email format check."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status code is 400\", () => {",
+                  "    pm.response.to.have.status(400);",
+                  "});",
+                  "",
+                  "pm.test(\"The email field is named in the error\", () => {",
+                  "    const { message } = pm.response.json();",
+                  "    const messages = Array.isArray(message) ? message : [message];",
+                  "    pm.expect(messages.join(\" \")).to.include(\"email\");",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "400 · Unknown Property Is Rejected",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"username\": \"extra_{{runId}}\",\n  \"email\": \"extra_{{runId}}@example.com\",\n  \"password\": \"{{password}}\",\n  \"role\": \"admin\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": "{{baseUrl}}/api/auth/register",
+            "description": "The validation pipe runs with `whitelist` and `forbidNonWhitelisted`, so a field the DTO does not declare is refused instead of being silently dropped or persisted. This is what stops mass-assignment."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status code is 400\", () => {",
+                  "    pm.response.to.have.status(400);",
+                  "});",
+                  "",
+                  "pm.test(\"The unknown field is named in the error\", () => {",
+                  "    const { message } = pm.response.json();",
+                  "    const messages = Array.isArray(message) ? message : [message];",
+                  "    pm.expect(messages.join(\" \")).to.include(\"role\");",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "400 · Duplicate Account",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"username\": \"{{username}}\",\n  \"email\": \"{{email}}\",\n  \"password\": \"{{password}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": "{{baseUrl}}/api/auth/register",
+            "description": "Registers the account from `01 · Authentication` a second time. Mongo's duplicate-key error is translated into a `400` so it never surfaces as a `500`."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status code is 400\", () => {",
+                  "    pm.response.to.have.status(400);",
+                  "});",
+                  "",
+                  "pm.test(\"A duplicate is reported as a bad request, not a crash\", () => {",
+                  "    pm.expect(pm.response.json().message).to.eql(\"An account with this username or email already exists\");",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "400 · Malformed Post Id",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/api/blog/not-a-mongo-id",
+            "description": "Without the id pipe, Mongoose would raise a `CastError` and Nest would turn it into a meaningless `500`. The pipe turns it into a `400` instead."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status code is 400\", () => {",
+                  "    pm.response.to.have.status(400);",
+                  "});",
+                  "",
+                  "pm.test(\"The malformed id is rejected with a readable message\", () => {",
+                  "    pm.expect(pm.response.json().message).to.eql(\"Invalid resource id\");",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "400 · Empty Comment Content",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"content\": \"\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": "{{baseUrl}}/api/blog/{{postId}}/comments",
+            "description": "An empty comment is refused by the DTO before it reaches the database."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status code is 400\", () => {",
+                  "    pm.response.to.have.status(400);",
+                  "});",
+                  "",
+                  "pm.test(\"The content field is named in the error\", () => {",
+                  "    const { message } = pm.response.json();",
+                  "    const messages = Array.isArray(message) ? message : [message];",
+                  "    pm.expect(messages.join(\" \")).to.include(\"content\");",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "404 · Post Does Not Exist",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/api/blog/000000000000000000000000",
+            "description": "A syntactically valid ObjectId that matches nothing. The API must answer `404`, not `400` and not an empty `200`."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status code is 404\", () => {",
+                  "    pm.response.to.have.status(404);",
+                  "});",
+                  "",
+                  "pm.test(\"A missing post is reported clearly\", () => {",
+                  "    pm.expect(pm.response.json().message).to.eql(\"Post not found\");",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "404 · Comment Already Deleted",
+          "request": {
+            "method": "DELETE",
+            "header": [],
+            "url": "{{baseUrl}}/api/blog/{{postId}}/comments/{{commentId}}",
+            "description": "The comment was already removed in `04 · Comments`. Deleting it again is not silently ignored — it is reported as missing."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status code is 404\", () => {",
+                  "    pm.response.to.have.status(404);",
+                  "});",
+                  "",
+                  "pm.test(\"The already deleted comment is reported as missing\", () => {",
+                  "    pm.expect(pm.response.json().message).to.eql(\"Comment not found\");",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "401 · Old Password Is Rejected",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status code is 401\", () => {",
+                  "    pm.response.to.have.status(401);",
+                  "});",
+                  "",
+                  "pm.test(\"The rejection message stays generic\", () => {",
+                  "    pm.expect(pm.response.json().message).to.eql(\"Invalid username or password\");",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"username\": \"{{username}}\",\n  \"password\": \"{{password}}\"\n}"
+            },
+            "url": "{{baseUrl}}/api/auth/login",
+            "description": "The password was changed earlier in the run, so the original one must now be refused. Uses the stale {{password}} value on purpose."
+          },
+          "response": []
+        },
+        {
+          "name": "401 · Wrong Password",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"username\": \"{{username}}\",\n  \"password\": \"Wr0ng!Password\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": "{{baseUrl}}/api/auth/login",
+            "description": "Correct username, wrong password. The generic message is the same one an unknown account receives, so login cannot be used to enumerate users."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status code is 401\", () => {",
+                  "    pm.response.to.have.status(401);",
+                  "});",
+                  "",
+                  "pm.test(\"The rejection message does not reveal which credential failed\", () => {",
+                  "    pm.expect(pm.response.json().message).to.eql(\"Invalid username or password\");",
+                  "});",
+                  "",
+                  "pm.test(\"No session cookie is issued on a failed login\", () => {",
+                  "    const setCookie = pm.response.headers.all()",
+                  "        .filter((header) => header.key.toLowerCase() === \"set-cookie\")",
+                  "        .map((header) => header.value)",
+                  "        .join(\"\\n\");",
+                  "    pm.expect(setCookie).to.not.include(\"access_token\");",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "401 · Unknown Username",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"username\": \"nobody_{{runId}}\",\n  \"password\": \"{{password}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": "{{baseUrl}}/api/auth/login",
+            "description": "Compared against the previous request: the response is byte-for-byte the same shape, which is exactly the no-enumeration guarantee."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status code is 401\", () => {",
+                  "    pm.response.to.have.status(401);",
+                  "});",
+                  "",
+                  "pm.test(\"An unknown account is indistinguishable from a wrong password\", () => {",
+                  "    pm.expect(pm.response.json().message).to.eql(\"Invalid username or password\");",
+                  "});",
+                  "",
+                  "pm.test(\"The response time is not meaningfully different from a wrong password\", () => {",
+                  "    pm.expect(pm.response.responseTime).to.be.below(10000);",
+                  "});"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "06 · Session Recovery",
+      "description": "Re-establishes a clean session after the negative tests, and re-asserts that the cookies still work.",
+      "item": [
+        {
+          "name": "Login",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"username\": \"{{username}}\",\n  \"password\": \"{{newPassword}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": "{{baseUrl}}/api/auth/login",
+            "description": "Logs the post author back in with the credentials set in `02 · User Profile`."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status code is 200\", () => {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "",
+                  "const body = pm.response.json();",
+                  "",
+                  "pm.test(\"The post author is signed in again\", () => {",
+                  "    pm.expect(body.id).to.eql(pm.collectionVariables.get(\"userId\"));",
+                  "});",
+                  "",
+                  "pm.test(\"Both cookies are present again\", () => {",
+                  "    const setCookie = pm.response.headers.all()",
+                  "        .filter((header) => header.key.toLowerCase() === \"set-cookie\")",
+                  "        .map((header) => header.value)",
+                  "        .join(\"\\n\");",
+                  "    pm.expect(setCookie).to.include(\"access_token\");",
+                  "    pm.expect(setCookie).to.include(\"refresh_token\");",
+                  "});"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "07 · Ownership Checks",
+      "description": "A second account is created and signed in so the authorisation rules are exercised against a real, different user rather than a simulated one.",
+      "item": [
+        {
+          "name": "Register Second User",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"username\": \"{{secondUsername}}\",\n  \"email\": \"{{secondEmail}}\",\n  \"password\": \"{{secondPassword}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": "{{baseUrl}}/api/auth/register",
+            "description": "Generates the second identity used by the `403` assertions."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status code is 201\", () => {",
+                  "    pm.response.to.have.status(201);",
+                  "});",
+                  "",
+                  "const body = pm.response.json();",
+                  "",
+                  "pm.test(\"The second user is a distinct account\", () => {",
+                  "    pm.expect(body).to.have.property(\"id\");",
+                  "    pm.expect(body.id).to.not.eql(pm.collectionVariables.get(\"userId\"));",
+                  "    pm.expect(body.username).to.eql(pm.collectionVariables.get(\"secondUsername\"));",
+                  "    pm.collectionVariables.set(\"secondUserId\", body.id);",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Login as Second User",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"username\": \"{{secondUsername}}\",\n  \"password\": \"{{secondPassword}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": "{{baseUrl}}/api/auth/login",
+            "description": "Replaces the session cookies, so everything after this request runs as the second user. `08 · Teardown` signs the author back in."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status code is 200\", () => {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "",
+                  "pm.test(\"The session now belongs to the second user\", () => {",
+                  "    pm.expect(pm.response.json().id).to.eql(pm.collectionVariables.get(\"secondUserId\"));",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "403 · Update Somebody Else's Post",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"title\": \"Hijacked by the second user\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": "{{baseUrl}}/api/blog/{{postId}}",
+            "description": "Authenticated, but not the author. The API answers `403` — not `404` — so the caller can tell \"not yours\" apart from \"not there\"."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status code is 403\", () => {",
+                  "    pm.response.to.have.status(403);",
+                  "});",
+                  "",
+                  "pm.test(\"The refusal names the action that was refused\", () => {",
+                  "    pm.expect(pm.response.json().message).to.eql(\"You are not allowed to update this post\");",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "403 · Delete Somebody Else's Post",
+          "request": {
+            "method": "DELETE",
+            "header": [],
+            "url": "{{baseUrl}}/api/blog/{{postId}}",
+            "description": "The same rule on the destructive path. `08 · Teardown` proves the post is still there afterwards."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status code is 403\", () => {",
+                  "    pm.response.to.have.status(403);",
+                  "});",
+                  "",
+                  "pm.test(\"The refusal names the action that was refused\", () => {",
+                  "    pm.expect(pm.response.json().message).to.eql(\"You are not allowed to delete this post\");",
+                  "});",
+                  ""
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "200 · Post Survives The Refused Delete",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status code is 200\", () => {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "",
+                  "const body = pm.response.json();",
+                  "",
+                  "pm.test(\"The post is still owned by its author\", () => {",
+                  "    pm.expect(body.id).to.eql(pm.collectionVariables.get(\"postId\"));",
+                  "    pm.expect(body.title).to.eql(pm.collectionVariables.get(\"updatedPostTitle\"));",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/api/blog/{{postId}}",
+            "description": "Reads the post back as a real request to prove the refused delete had no side effect."
+          },
+          "response": []
+        },
+        {
+          "name": "200 · Own Feed Is Empty For The Second User",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/api/blog/own",
+            "description": "Proof that ownership filtering is real: the second user has no posts, because the post belongs to somebody else."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status code is 200\", () => {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "",
+                  "const body = pm.response.json();",
+                  "",
+                  "pm.test(\"The second user owns nothing\", () => {",
+                  "    pm.expect(body.blogs).to.be.an(\"array\");",
+                  "    pm.expect(body.total).to.eql(0);",
+                  "});",
+                  "",
+                  "pm.test(\"The other author's post is not in this feed\", () => {",
+                  "    pm.expect(body.blogs.map((post) => post.id)).to.not.include(pm.collectionVariables.get(\"postId\"));",
+                  "});"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "08 · Teardown",
+      "description": "Signs the author back in and removes the post created at the start of the run, leaving the database as it was found.",
+      "item": [
+        {
+          "name": "Login as Post Author",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"username\": \"{{username}}\",\n  \"password\": \"{{newPassword}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": "{{baseUrl}}/api/auth/login",
+            "description": "Only the author may delete the post, so the author has to be the one signed in."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status code is 200\", () => {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "",
+                  "pm.test(\"The author is signed in\", () => {",
+                  "    pm.expect(pm.response.json().id).to.eql(pm.collectionVariables.get(\"userId\"));",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Delete Post",
+          "request": {
+            "method": "DELETE",
+            "header": [],
+            "url": "{{baseUrl}}/api/blog/{{postId}}",
+            "description": "Author-only delete, returning `200` and the removed post."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status code is 200\", () => {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "",
+                  "pm.test(\"The removed post is echoed back\", () => {",
+                  "    const body = pm.response.json();",
+                  "    pm.expect(body.id).to.eql(pm.collectionVariables.get(\"postId\"));",
+                  "    pm.expect(body.title).to.eql(pm.collectionVariables.get(\"updatedPostTitle\"));",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "404 · Post Is Gone",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/api/blog/{{postId}}",
+            "description": "Confirms the delete actually removed the document, rather than only reporting success."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status code is 404\", () => {",
+                  "    pm.response.to.have.status(404);",
+                  "});",
+                  "",
+                  "pm.test(\"The deleted post is reported as missing\", () => {",
+                  "    pm.expect(pm.response.json().message).to.eql(\"Post not found\");",
+                  "});"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "09 · Logout",
+      "description": "Signs the author out for real. Everything after this point runs with no session at all, which is the only trustworthy way to prove the guards actually reject anonymous callers.",
+      "item": [
+        {
+          "name": "Logout",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": "{{baseUrl}}/api/auth/logout",
+            "description": "Clears both auth cookies using the exact attributes they were set with, which is what makes the browser actually drop them."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status code is 200\", () => {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "",
+                  "pm.test(\"Response confirms the sign out\", () => {",
+                  "    pm.expect(pm.response.json().message).to.eql(\"Signed out successfully\");",
+                  "});",
+                  "",
+                  "pm.test(\"Both cookies are cleared\", () => {",
+                  "    const setCookie = pm.response.headers.all()",
+                  "        .filter((header) => header.key.toLowerCase() === \"set-cookie\")",
+                  "        .map((header) => header.value)",
+                  "        .join(\"\\n\");",
+                  "    pm.expect(setCookie).to.include(\"access_token\");",
+                  "    pm.expect(setCookie).to.include(\"refresh_token\");",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "401 · Session Is Closed",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/api/user/me",
+            "description": "The final assertion of the run: after logout the same request that succeeded in `02 · User Profile` is refused. Fired out of band so the assertion is about the API, not about the cookie jar's bookkeeping."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status code is 401\", () => {",
+                  "    pm.response.to.have.status(401);",
+                  "});",
+                  ""
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "10 · Session Is Closed",
+      "description": "Runs after Logout, so there is no cookie to send. A 200 here would mean a protected route accepted an anonymous caller. These replace sub-requests, which inherit the signed-in cookie jar and therefore cannot test anonymity at all.",
+      "item": [
+        {
+          "name": "401 · Creating A Post Is Refused",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status code is 401\", () => {",
+                  "    pm.response.to.have.status(401);",
+                  "});",
+                  "",
+                  "pm.test(\"The guard names the missing session\", () => {",
+                  "    pm.expect(pm.response.json().message).to.eql(\"Unauthorized\");",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"title\": \"Should never be created\",\n  \"content\": \"Nope.\"\n}"
+            },
+            "url": "{{baseUrl}}/api/blog",
+            "description": "No cookie is sent because the session was closed in the previous folder."
+          },
+          "response": []
+        },
+        {
+          "name": "401 · Refresh Cannot Be Revived",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status code is 401\", () => {",
+                  "    pm.response.to.have.status(401);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": "{{baseUrl}}/api/auth/refresh-token",
+            "description": "Logout cleared the refresh cookie, so the refresh strategy must reject the request."
+          },
+          "response": []
+        }
+      ]
+    }
+  ]
+}
