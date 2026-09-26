@@ -19,7 +19,10 @@ services:
     runtime: node
     plan: free
     region: oregon
-    buildCommand: npm ci && npm run build
+    # NODE_ENV=production makes npm skip devDependencies, but the Nest CLI that
+    # compiles the TypeScript lives there, so they are requested explicitly.
+    # At runtime only the compiled `dist` and `dependencies` are needed.
+    buildCommand: npm ci --include=dev && npm run build
     startCommand: node dist/main.js
     healthCheckPath: /api
     autoDeploy: true
